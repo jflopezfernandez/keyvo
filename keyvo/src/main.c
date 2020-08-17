@@ -83,6 +83,9 @@ void initialize_symbol_table(struct symbol_table_t* symbol_table) {
  */
 static bool already_running(void) {
     
+    /** Reset errno for diagnostics */
+    errno = 0;
+
     /**
      * @brief Test whether the global file lock is in its
      * configured location. Additionally, the server checks
@@ -91,10 +94,36 @@ static bool already_running(void) {
      * running into one another.
      * 
      */
-    int fd = open(LOCKFILE, O_RDWR | O_CREAT, LOCKMODE);
+    int fd = open(LOCKFILE, O_RDWR | O_CREAT | O_EXCL, LOCKMODE);
 
-    /** @todo: Complete this - IN PROGRESS */
-    return true;
+    if (fd < 0) {
+        
+        /**
+         * @brief Someone else has access to it at the
+         * moment, which means we are not the first process
+         * to try to become the server.
+         *
+         * @details Rather than simply exiting with an error
+         * right away, let the user know exactly what they
+         * need to do to correctly increase the server's
+         * capacity to handle traffic.
+         * 
+         */
+        syslog(LOG_ERR, "%s: %s", "Cannot open lock file", LOCKFILE);
+
+        /**
+         * @brief Return to daemonize().
+         * 
+         */
+        return true;
+    }
+
+    /**
+     * @brief No problem found; continue establishing
+     * daemon environment.
+     * 
+     */
+    return false;
 }
 
 /**
@@ -117,11 +146,19 @@ void daemonize(void) {
         
         /**
          * @brief There was a process already running, so
-         * there's nothing for us to do. Return void and
-         * go back to whence we came.
+         * there's nothing for us to do. Let the user know
+         * what happened and exit with an error status.
          * 
          */
-        return;
+        fprintf(stderr, "%s\n", "It seems you were already running a primary server. Are looking for replication?");
+
+        /**
+         * @brief Exit with an error status so both the
+         * kernel and the user know that something went
+         * wrong.
+         * 
+         */
+        exit(EXIT_FAILURE);
     }
 
     /**
@@ -311,6 +348,13 @@ int main(int argc, char *argv[])
 
     /**
      * @brief Cross over to the spirit world.
+     *
+     * @details If there is any problem during the
+     * daemonization procedure, the server simply exists
+     * while outputting a trace to the system log. Any code
+     * beyond this point can be safely assumed to execute
+     * only after the server's environment has been properly
+     * set up.
      *
      */
     daemonize();
