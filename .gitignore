@@ -52,6 +52,6 @@ Mkfile.old
 dkms.conf
 
 # Target
-keyvo
-keyvo-cli
+keyvo/keyvo
+keyvo-cli/keyvo-cli
 
