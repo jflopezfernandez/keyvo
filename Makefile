@@ -11,30 +11,14 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-vpath %.c src
-
-CC       := gcc
-CFLAGS   := -std=c17 -Wall -Wextra -Wpedantic -O3 -march=native
-CPPFLAGS := -Iinclude
-LDFLAGS  := 
-LIBS     :=
-
-RM       := rm -f
-
-SRCS     := $(notdir $(wildcard src/*.c))
-OBJS     := $(patsubst %.c,%.o,$(SRCS))
-
-TARGET   := keyvo
+# This pathetic excuse for a Makefile is just a hack until
+# the project advances enough for me to want to put the
+# effort into setting up the Autotools build-chain.
 
 .PHONY: all
-all: $(TARGET)
-
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
-
-%.o: %.c
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $^
+all: $(TARGETS)
+	$(MAKE) -C keyvo && $(MAKE) -C keyvo-cli
 
 .PHONY: clean
 clean:
-	$(RM) $(OBJS) $(TARGET)
+	$(MAKE) -C keyvo clean && $(MAKE) -C keyvo-cli clean
