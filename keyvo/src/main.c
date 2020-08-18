@@ -421,6 +421,37 @@ static struct option long_options[] = {
 int main(int argc, char *argv[])
 {
     /**
+     * @brief Register the final syslog trace as a callback
+     * pending the normal termination of the program.
+     * 
+     */
+    if (atexit(print_to_syslog_on_exit) != 0) {
+        /**
+         * @brief The 'atexit' function returns zero on
+         * success and an unspecified non-zero value on
+         * failure, so if we made it to this branch,
+         * something went wrong.
+         *
+         * @details Since all we're doing is registering a
+         * debug callback, we're not going to treat this
+         * error as fatal, but it will definitely need to
+         * be examined further before we can assertain the
+         * error to be genuinely spurious.
+         *
+         * Ironically, if we fail to register a callback
+         * that prints to prints to syslog, we print to
+         * syslog. If that call fails, it doesn't matter,
+         * since, again, it's just a minor additional datum.
+         * Besides, we can mathematically show that this
+         * problem beta-reduces to the Byzantine Generals
+         * problem, and are therefore for all intents and
+         * purposes the same thing. Thus, we move on with
+         * our lives.
+         */
+        syslog(LOG_WARNING, "%s", "Failed to register syslog exit tracer callback.");
+    }
+
+    /**
      * @brief Begin parsing command-line options.
      *
      * @bug The character option string for the command-
