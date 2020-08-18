@@ -15,7 +15,7 @@ vpath %.c src
 
 CC       := gcc
 CFLAGS   := -std=c17 -Wall -Wextra -Wpedantic -O3 -march=native
-CPPFLAGS := -Iinclude  -D_POSIX_C_SOURCE=200112L -D_GNU_SOURCE
+CPPFLAGS := -Iinclude  -D_POSIX_C_SOURCE=200112L -D_GNU_SOURCE -D_POSIX_THREAD_SAFE_FUNCTIONS -D_XOPEN_SOURCE=700
 LDFLAGS  := 
 LIBS     :=
 

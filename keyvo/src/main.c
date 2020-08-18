@@ -358,6 +358,63 @@ void daemonize(void) {
 }
 
 /**
+ * @brief Once the server enters this function, it is ready
+ * to delete the file lock which was heretofore preventing
+ * other potential incarnations of the process to become
+ * the server.
+ *
+ * All of the data structures being used in the
+ * implementation right now are the obvious and highly-
+ * inefficient kind for the purposes of prototyping. Once
+ * we move to a data-model that relies on eventual-
+ * consistency and optimistic replication. For the moment,
+ * however, our low-tech mutex is the state of the part, as
+ * far as the project is concerned, and the file lock must
+ * be removed if we would like to be able to re-run the
+ * server without manual intervention.
+ * 
+ */
+void remove_lock_on_exit(void) {
+    /**
+     * @note Note, the callback is going to be registered
+     * with the *normal* process termination callback only
+     * for the moment, so the file lock will not be removed
+     * on a quick exist, such as that invoked by the _Exit()
+     * or _exit() system calls.
+     *
+     * Begin by clearing errno to make sure we don't pollute
+     * the error code.
+     * 
+     */
+    errno = 0;
+
+    /**
+     * @brief Carry out the deletion command on the
+     * lockfile.
+     * 
+     */
+    int result = unlink(LOCKFILE);
+
+    /**
+     * @brief Since we're exiting anyway, there's no need do
+     * to any branched returns; we're simply going to output
+     * a diagnostic message to standard out, but other than
+     * that, there isn't much else for us to do here.
+     * 
+     */
+    if (result == -1) {
+        /**
+         * @brief Echo diagnostic information out to the
+         * system log, making sure to get the official 
+         * error message for the value in errno via a call
+         * to strerror.
+         * 
+         */
+        syslog(LOG_ERR, "%s", "The filelock mutex was not deleted, and will **prevent the server from starting until it is manually removed**.");
+    }
+}
+
+/**
  * @brief This function's entire purpose in life is to make
  * sure a trace call to the system log is the last thing
  * the world remembers of this process.
@@ -399,10 +456,10 @@ const char* configuration_filename = NULL;
  * 
  */
 static struct option long_options[] = {
-    { "help",           no_argument,        0,              'h' },
-    { "verbose",        no_argument,        &verbose,       1 },
-    { "quiet",          no_argument,        &quiet,             1 },
-    { "configuration-filename",         required_argument,       0, 'f' },
+    { "help",           no_argument,        0,                  'h' },
+    { "verbose",        no_argument,        &verbose,            1  },
+    { "quiet",          no_argument,        &quiet,              1  },
+    { "configuration-filename",         required_argument,  0,  'f' },
     {   0,              0,              0, 0 }
 };
 
@@ -449,6 +506,31 @@ int main(int argc, char *argv[])
          * our lives.
          */
         syslog(LOG_WARNING, "%s", "Failed to register syslog exit tracer callback.");
+    }
+
+    /**
+     * @brief Register the filelock-deletion subroutine as a
+     * callback on the regular-priority exit handler.
+     * 
+     */
+    if (atexit(remove_lock_on_exit) != 0) {
+        /**
+         * @brief A diagnostic is technically more valuable
+         * in this case, but the repercussions here last
+         * beyond the scope of the final execution, since
+         * the server will be unable to start when it's
+         * being blocked by the mutex. On the other hand, 
+         * however, the repercussions at worst are
+         * technically just the same information they would
+         * have gotten from us here, minus a few details.
+         *
+         * We're going to speed things up by simply logging
+         * any diagnostics to the journal, so that any
+         * system administrators can solve their problem as
+         * soon as they look in the first logical place.
+         * 
+         */
+        syslog(LOG_ERR, "%s", "The filelock mutex was not deleted, and will **prevent the server from starting until it is manually removed**.");
     }
 
     /**
@@ -518,8 +600,10 @@ int main(int argc, char *argv[])
     // printf("Quiet: %d\n", quiet);
 
     // TODO: Read command-line line args
-    // TODO: Read configuration file
+    // TODO: Read configuration file ----------
     // TODO: Daemonize
+    // TODO: Listen for SIGHUP to reload configuration
+    // TODO: Wait for incoming socket connections
     // TODO: Accept commands: ( DEFINE | UPDATE | DROP )
 
     /**
