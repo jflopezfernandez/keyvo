@@ -64,7 +64,7 @@ void initialize_symbol_table(struct symbol_table_t* symbol_table) {
         symbol_table = malloc(10 * sizeof (struct key_val_t));
 
         if (symbol_table == NULL) {
-            fprintf(stderr, "%s\n", "Memory-allocation failure.");
+            syslog(LOG_ERR, "%s\n", "Memory-allocation failure.");
             exit(EXIT_FAILURE);
         }
     }
@@ -92,9 +92,19 @@ static bool already_running(void) {
      * to make sure the file lock is both readable and
      * writable, thus preventing multiple processes from
      * running into one another.
+     *
+     * @bug The file permissions belowe are meant to allow
+     * for the file in question to act as a mutex but
+     * allowing a process to open it in read-write mode if
+     * and only if it has not already been opened by
+     * another process. Whether the file exists before it
+     * is opened should be irrelevant.
+     *
+     * Update: I've added the O_CRET flag to the function
+     * call, so we'll see if it fixes the problem.
      * 
      */
-    int fd = open(LOCKFILE, O_RDWR | O_CREAT | O_EXCL, LOCKMODE);
+    int fd = open(LOCKFILE, O_CREAT | O_RDWR | O_CREAT | O_EXCL, LOCKMODE);
 
     if (fd < 0) {
         
@@ -150,7 +160,7 @@ void daemonize(void) {
          * what happened and exit with an error status.
          * 
          */
-        fprintf(stderr, "%s\n", "It seems you were already running a primary server. Are looking for replication?");
+        syslog(LOG_ERR, "%s\n", "It seems you were already running a primary server. Are looking for replication?");
 
         /**
          * @brief Exit with an error status so both the
@@ -205,7 +215,7 @@ void daemonize(void) {
              * quick statement.
              * 
              */
-            fprintf(stderr, "%s\n", "Error after calling fork()");
+            syslog(LOG_ERR, "%s\n", "Error after calling fork()");
             exit(EXIT_FAILURE);
         } break;
 
@@ -228,7 +238,20 @@ void daemonize(void) {
          * 
          */
         default: {
-            /** @brief Exit with a success status code */
+            /**
+             * @brief Print a message to the system log for
+             * debugging purposes.
+             * 
+             */
+            syslog(LOG_DEBUG, "%s\n", "Keyvo parent threat terminating...");
+
+            /**
+             * @brief Go ahead and terminate the parent
+             * process now that all of the complex setuid()
+             * bookkeeping has been handled.
+             * 
+             * @return Exit 
+             */
             exit(EXIT_SUCCESS);
         } break;
     }
@@ -252,7 +275,7 @@ void daemonize(void) {
      * 
      */
     if (chdir("/") < 0) {
-        fprintf(stderr, "%s\n", "Failed to change directory");
+        syslog(LOG_ERR, "%s\n", "Failed to change directory");
         exit(EXIT_FAILURE);
     }
 
@@ -264,7 +287,7 @@ void daemonize(void) {
     struct rlimit rl;
 
     if (getrlimit(RLIMIT_NOFILE, &rl) < 0) {
-        fprintf(stderr, "%s\n", "Error in call to getrlimit()");
+        syslog(LOG_ERR, "%s", "Error in call to getrlimit()");
         exit(EXIT_FAILURE);
     }
 
@@ -306,7 +329,7 @@ void daemonize(void) {
     sa.sa_flags = 0;
 
     if (sigaction(SIGHUP, &sa, NULL) < 0) {
-        fprintf(stderr, "%s\n", "Fatal error after calling sigaction()");
+        syslog(LOG_ERR, "%s", "Fatal error after calling sigaction()");
         exit(EXIT_FAILURE);
     }
 
@@ -322,10 +345,66 @@ void daemonize(void) {
      * 
      */
     if ((fd0 != 0) || (fd1 != 1) || (fd2 != 2)) {
-        syslog(LOG_ERR, "%s %s %s\n", "Unexpected file descriptors", "Unexpected file descriptors", "Unexpected file descriptors");
+        syslog(LOG_ERR, "%s %s %s", "Unexpected file descriptors", "Unexpected file descriptors", "Unexpected file descriptors");
         exit(EXIT_FAILURE);
     }
+
+    /**
+     * @brief Print a message to the system log once we've
+     * completed the daemonization process.
+     * 
+     */
+    syslog(LOG_DEBUG, "%s", "Daemonization complete; the server has been initialized.");
 }
+
+/**
+ * @brief This function's entire purpose in life is to make
+ * sure a trace call to the system log is the last thing
+ * the world remembers of this process.
+ * 
+ */
+void print_to_syslog_on_exit(void) {
+    /**
+     * @brief As this processes' last action on this Earth,
+     * print to syslog, and become truly immortal.
+     * 
+     */
+    syslog(LOG_DEBUG, "%s", "Server shutdown in progress...");
+}
+
+/**
+ * @brief This variable is set by the --verbose or --quiet
+ * command-line options.
+ * 
+ */
+static int verbose = false;
+
+/**
+ * @brief This variable is set by the --verbose or --quiet
+ * command-line options.
+ * 
+ */
+static int quiet = false;
+
+/**
+ * @brief This variable is set by the --filename ARG or
+ * -F ARG command-line options.
+ * 
+ */
+const char* configuration_filename = NULL;
+
+/**
+ * @brief The following table contains a description of the
+ * long options supported by the server.
+ * 
+ */
+static struct option long_options[] = {
+    { "help",           no_argument,        0,              'h' },
+    { "verbose",        no_argument,        &verbose,       1 },
+    { "quiet",          no_argument,        &quiet,             1 },
+    { "configuration-filename",         required_argument,       0, 'f' },
+    {   0,              0,              0, 0 }
+};
 
 /**
  * @brief This is the entry point of the server execution
@@ -341,6 +420,72 @@ void daemonize(void) {
  */
 int main(int argc, char *argv[])
 {
+    /**
+     * @brief Begin parsing command-line options.
+     *
+     * @bug The character option string for the command-
+     * line arguments was just thrown together without much
+     * thought. As a result, command-line flags with no
+     * values, such as '--verbose', '--help', or '--quiet',
+     * are sometimes recognized and sometimes not. Dare I
+     * say it would be nice of us to at least decrease the
+     * variance inherent in the given error distribution, if
+     * we were so inclined, to speak nothing of actually
+     * *fixing* the problem, of course.
+     * 
+     */
+    int option_index = 0;
+
+    while (1) {
+        int this_option_optind = (optind) ? optind : 1;
+
+        int c = getopt_long(argc, argv, "+hf:vq", long_options, &option_index);
+
+        if (c == -1) {
+            break;
+        }
+
+        switch (c) {
+            case 0: {
+                /** */
+            } break;
+
+            case 'f': {
+                configuration_filename = optarg;
+                // printf("Filename: %s\n", optarg);
+            } break;
+
+            case 'h': {
+                // printf("Help Menu\n");
+            } break;
+
+            case 'v': {
+                // printf("verbose\n");
+            } break;
+
+            case '?': {
+                // printf("?? %s\n", long_options[optind].flag);
+            } break;
+
+            default: {
+                // printf("%d %s\n", optind, optarg);
+            } break;
+        }
+    }
+
+    // if (option_index < argc) {
+    //     printf("non-option argv-elements: ");
+
+    //     while (optind < argc) {
+    //         printf("%s ", argv[optind++]);
+    //     }
+
+    //     printf("\n");
+    // }
+
+    // printf("Verbose: %d\n", verbose);
+    // printf("Quiet: %d\n", quiet);
+
     // TODO: Read command-line line args
     // TODO: Read configuration file
     // TODO: Daemonize

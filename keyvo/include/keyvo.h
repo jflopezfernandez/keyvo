@@ -36,12 +36,14 @@
     #include <syslog.h>
     #include <unistd.h>
     #include <errno.h>
+
+    #include <getopt.h>
 #else
     #error "The current platform is not supported."
 #endif /** @todo Move to a configuration file */
 
 #ifndef LOCKFILE
-#define LOCKFILE "/var/log/keyvo.lock"
+#define LOCKFILE "keyvo.lock"
 #endif /** Keyvo lockfile */
 
 #ifndef LOCKMODE
