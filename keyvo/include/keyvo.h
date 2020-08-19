@@ -22,28 +22,31 @@
 #include <signal.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <ctype.h>
 
 #if !defined(unix) || !defined(linux)
-    #include <sys/stat.h>
+    #include <unistd.h>
+
     #include <sys/resource.h>
-    #include <sys/types.h>
     #include <sys/socket.h>
-    #include <netinet/in.h>
+    #include <sys/stat.h>
+    #include <sys/types.h>
+    
     #include <arpa/inet.h>
+
+    #include <netinet/in.h>
+    
     #include <fcntl.h>
+    #include <getopt.h>
     #include <netdb.h>
     #include <syslog.h>
-    #include <unistd.h>
-    #include <errno.h>
-
-    #include <getopt.h>
 #else
     #error "The current platform is not supported."
 #endif /** @todo Move to a configuration file */
 
 #ifndef LOCKFILE
-#define LOCKFILE "keyvo.lock"
+#define LOCKFILE "/var/tmp/keyvo.lock"
 #endif /** Keyvo lockfile */
 
 #ifndef LOCKMODE

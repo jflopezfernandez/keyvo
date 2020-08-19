@@ -16,6 +16,20 @@
 #include "keyvo.h"
 
 /**
+ * @todo Implement hashing functionality.
+ *
+ * - gperf
+ * - sparsehash
+ * - libkeccak
+ * - mhash
+ * - xxhash
+ *
+ * - murmurhash3
+ * - jenkinshash
+ * 
+ */
+
+/**
  * @brief This struct contains two mutable char pointers
  * which will point at a dynamic configuration setting.
  */
@@ -71,6 +85,91 @@ void initialize_symbol_table(struct symbol_table_t* symbol_table) {
 }
 
 /**
+ * @brief Once the server enters this function, it is ready
+ * to delete the file lock which was heretofore preventing
+ * other potential incarnations of the process to become
+ * the server.
+ *
+ * All of the data structures being used in the
+ * implementation right now are the obvious and highly-
+ * inefficient kind for the purposes of prototyping. Once
+ * we move to a data-model that relies on eventual-
+ * consistency and optimistic replication. For the moment,
+ * however, our low-tech mutex is the state of the part, as
+ * far as the project is concerned, and the file lock must
+ * be removed if we would like to be able to re-run the
+ * server without manual intervention.
+ * 
+ */
+void remove_lock_on_exit(void) {
+    /**
+     * @note Note, the callback is going to be registered
+     * with the *normal* process termination callback only
+     * for the moment, so the file lock will not be removed
+     * on a quick exist, such as that invoked by the _Exit()
+     * or _exit() system calls.
+     *
+     * Begin by clearing errno to make sure we don't pollute
+     * the error code.
+     * 
+     */
+    errno = 0;
+
+    /**
+     * @brief Carry out the deletion command on the
+     * lockfile.
+     * 
+     */
+    int result = unlink(LOCKFILE);
+
+    /**
+     * @brief Since we're exiting anyway, there's no need do
+     * to any branched returns; we're simply going to output
+     * a diagnostic message to standard out, but other than
+     * that, there isn't much else for us to do here.
+     *
+     * @note This branch keeps getting triggered for some
+     * reason even though the lockfile does exist and is
+     * being successfully deleted. I wonder if it has
+     * something to do with the fact that the function is
+     * being called as an exit callback.
+     *
+     * @note The error message is not wrong; I forgot the
+     * server has to call fork() in order to become a
+     * daemon. The filelock deletion callback is therefore
+     * being triggered twice but failing once, since
+     * obviously the filelock no longer exists after being
+     * deleted.
+     * 
+     */
+    if (result == -1) {
+        /**
+         * @brief Echo diagnostic information out to the
+         * system log, making sure to get the official 
+         * error message for the value in errno via a call
+         * to strerror.
+         * 
+         */
+        syslog(LOG_ERR, "Could not delete the file lock: %s - %s", strerror(errno), "The filelock mutex was not deleted, and will **prevent the server from starting until it is manually removed**.");
+    }
+}
+
+/**
+ * @brief This function's entire purpose in life is to make
+ * sure a trace call to the system log is the last thing
+ * the world remembers of this process.
+ * 
+ */
+void print_to_syslog_on_exit(void) {
+    /**
+     * @brief As this processes' last action on this Earth,
+     * print to syslog, and become truly immortal.
+     * 
+     */
+    syslog(LOG_DEBUG, "%s", "Server shutdown in progress...");
+}
+
+/**
  * @brief This function checks whether there is already a
  * version of the process being executed.
  *
@@ -104,9 +203,9 @@ static bool already_running(void) {
      * call, so we'll see if it fixes the problem.
      * 
      */
-    int fd = open(LOCKFILE, O_CREAT | O_RDWR | O_CREAT | O_EXCL, LOCKMODE);
+    int lockfile_descriptor = open(LOCKFILE, O_CREAT | O_RDWR | O_CREAT | O_EXCL, LOCKMODE);
 
-    if (fd < 0) {
+    if (lockfile_descriptor == -1) {
         
         /**
          * @brief Someone else has access to it at the
@@ -127,6 +226,16 @@ static bool already_running(void) {
          */
         return true;
     }
+
+    /**
+     * @brief Close the file descriptor holding a reference
+     * to the lockfile; we don't need it. The pre-existence
+     * of a lock file is enough to trigger a failure when
+     * inadvertently spawning another instance of the
+     * server.
+     * 
+     */
+    close(lockfile_descriptor);
 
     /**
      * @brief No problem found; continue establishing
@@ -280,6 +389,62 @@ void daemonize(void) {
     }
 
     /**
+     * @brief Register the final syslog trace as a callback
+     * pending the normal termination of the program.
+     * 
+     */
+    if (atexit(print_to_syslog_on_exit) != 0) {
+        /**
+         * @brief The 'atexit' function returns zero on
+         * success and an unspecified non-zero value on
+         * failure, so if we made it to this branch,
+         * something went wrong.
+         *
+         * @details Since all we're doing is registering a
+         * debug callback, we're not going to treat this
+         * error as fatal, but it will definitely need to
+         * be examined further before we can assertain the
+         * error to be genuinely spurious.
+         *
+         * Ironically, if we fail to register a callback
+         * that prints to prints to syslog, we print to
+         * syslog. If that call fails, it doesn't matter,
+         * since, again, it's just a minor additional datum.
+         * Besides, we can mathematically show that this
+         * problem beta-reduces to the Byzantine Generals
+         * problem, and are therefore for all intents and
+         * purposes the same thing. Thus, we move on with
+         * our lives.
+         */
+        syslog(LOG_WARNING, "%s", "Failed to register syslog exit tracer callback.");
+    }
+
+    /**
+     * @brief Register the filelock-deletion subroutine as a
+     * callback on the regular-priority exit handler.
+     * 
+     */
+    if (atexit(remove_lock_on_exit) != 0) {
+        /**
+         * @brief A diagnostic is technically more valuable
+         * in this case, but the repercussions here last
+         * beyond the scope of the final execution, since
+         * the server will be unable to start when it's
+         * being blocked by the mutex. On the other hand, 
+         * however, the repercussions at worst are
+         * technically just the same information they would
+         * have gotten from us here, minus a few details.
+         *
+         * We're going to speed things up by simply logging
+         * any diagnostics to the journal, so that any
+         * system administrators can solve their problem as
+         * soon as they look in the first logical place.
+         * 
+         */
+        syslog(LOG_ERR, "%s", "The filelock mutex deletion callback could not be registered.");
+    }
+
+    /**
      * @brief Get the resource limits for the current user
      * so we can evaluate the filehandle situation.
      * 
@@ -358,90 +523,11 @@ void daemonize(void) {
 }
 
 /**
- * @brief Once the server enters this function, it is ready
- * to delete the file lock which was heretofore preventing
- * other potential incarnations of the process to become
- * the server.
- *
- * All of the data structures being used in the
- * implementation right now are the obvious and highly-
- * inefficient kind for the purposes of prototyping. Once
- * we move to a data-model that relies on eventual-
- * consistency and optimistic replication. For the moment,
- * however, our low-tech mutex is the state of the part, as
- * far as the project is concerned, and the file lock must
- * be removed if we would like to be able to re-run the
- * server without manual intervention.
- * 
- */
-void remove_lock_on_exit(void) {
-    /**
-     * @note Note, the callback is going to be registered
-     * with the *normal* process termination callback only
-     * for the moment, so the file lock will not be removed
-     * on a quick exist, such as that invoked by the _Exit()
-     * or _exit() system calls.
-     *
-     * Begin by clearing errno to make sure we don't pollute
-     * the error code.
-     * 
-     */
-    errno = 0;
-
-    /**
-     * @brief Carry out the deletion command on the
-     * lockfile.
-     * 
-     */
-    int result = unlink(LOCKFILE);
-
-    /**
-     * @brief Since we're exiting anyway, there's no need do
-     * to any branched returns; we're simply going to output
-     * a diagnostic message to standard out, but other than
-     * that, there isn't much else for us to do here.
-     * 
-     */
-    if (result == -1) {
-        /**
-         * @brief Echo diagnostic information out to the
-         * system log, making sure to get the official 
-         * error message for the value in errno via a call
-         * to strerror.
-         * 
-         */
-        syslog(LOG_ERR, "%s", "The filelock mutex was not deleted, and will **prevent the server from starting until it is manually removed**.");
-    }
-}
-
-/**
- * @brief This function's entire purpose in life is to make
- * sure a trace call to the system log is the last thing
- * the world remembers of this process.
- * 
- */
-void print_to_syslog_on_exit(void) {
-    /**
-     * @brief As this processes' last action on this Earth,
-     * print to syslog, and become truly immortal.
-     * 
-     */
-    syslog(LOG_DEBUG, "%s", "Server shutdown in progress...");
-}
-
-/**
  * @brief This variable is set by the --verbose or --quiet
  * command-line options.
  * 
  */
 static int verbose = false;
-
-/**
- * @brief This variable is set by the --verbose or --quiet
- * command-line options.
- * 
- */
-static int quiet = false;
 
 /**
  * @brief This variable is set by the --filename ARG or
@@ -458,7 +544,7 @@ const char* configuration_filename = NULL;
 static struct option long_options[] = {
     { "help",           no_argument,        0,                  'h' },
     { "verbose",        no_argument,        &verbose,            1  },
-    { "quiet",          no_argument,        &quiet,              1  },
+    { "quiet",          no_argument,        &verbose,            0  },
     { "configuration-filename",         required_argument,  0,  'f' },
     {   0,              0,              0, 0 }
 };
@@ -478,62 +564,6 @@ static struct option long_options[] = {
 int main(int argc, char *argv[])
 {
     /**
-     * @brief Register the final syslog trace as a callback
-     * pending the normal termination of the program.
-     * 
-     */
-    if (atexit(print_to_syslog_on_exit) != 0) {
-        /**
-         * @brief The 'atexit' function returns zero on
-         * success and an unspecified non-zero value on
-         * failure, so if we made it to this branch,
-         * something went wrong.
-         *
-         * @details Since all we're doing is registering a
-         * debug callback, we're not going to treat this
-         * error as fatal, but it will definitely need to
-         * be examined further before we can assertain the
-         * error to be genuinely spurious.
-         *
-         * Ironically, if we fail to register a callback
-         * that prints to prints to syslog, we print to
-         * syslog. If that call fails, it doesn't matter,
-         * since, again, it's just a minor additional datum.
-         * Besides, we can mathematically show that this
-         * problem beta-reduces to the Byzantine Generals
-         * problem, and are therefore for all intents and
-         * purposes the same thing. Thus, we move on with
-         * our lives.
-         */
-        syslog(LOG_WARNING, "%s", "Failed to register syslog exit tracer callback.");
-    }
-
-    /**
-     * @brief Register the filelock-deletion subroutine as a
-     * callback on the regular-priority exit handler.
-     * 
-     */
-    if (atexit(remove_lock_on_exit) != 0) {
-        /**
-         * @brief A diagnostic is technically more valuable
-         * in this case, but the repercussions here last
-         * beyond the scope of the final execution, since
-         * the server will be unable to start when it's
-         * being blocked by the mutex. On the other hand, 
-         * however, the repercussions at worst are
-         * technically just the same information they would
-         * have gotten from us here, minus a few details.
-         *
-         * We're going to speed things up by simply logging
-         * any diagnostics to the journal, so that any
-         * system administrators can solve their problem as
-         * soon as they look in the first logical place.
-         * 
-         */
-        syslog(LOG_ERR, "%s", "The filelock mutex was not deleted, and will **prevent the server from starting until it is manually removed**.");
-    }
-
-    /**
      * @brief Begin parsing command-line options.
      *
      * @bug The character option string for the command-
@@ -549,55 +579,91 @@ int main(int argc, char *argv[])
      */
     int option_index = 0;
 
-    while (1) {
-        int this_option_optind = (optind) ? optind : 1;
+    /**
+     * @brief The return value from getopt_long is set
+     * to -1 when there are no more command-line
+     * arguments to parse, at which point we can exit
+     * this loop;
+     * 
+     */
+    int c = 0;
 
-        int c = getopt_long(argc, argv, "+hf:vq", long_options, &option_index);
-
-        if (c == -1) {
-            break;
-        }
-
+    /**
+     * @brief Commence command-line argument parsing.
+     * 
+     */
+    while ((c = getopt_long(argc, argv, "+vqhf:", long_options, &option_index)) != -1) {
         switch (c) {
             case 0: {
-                /** */
+                /** @todo Fix this */
             } break;
 
             case 'f': {
                 configuration_filename = optarg;
-                // printf("Filename: %s\n", optarg);
+                
+                /** @todo Remove after testing */
+                printf("Filename: %s\n", optarg);
             } break;
 
             case 'h': {
-                // printf("Help Menu\n");
+                /** @todo Remove after testing */
+                printf("Help Menu\n");
             } break;
 
             case 'v': {
-                // printf("verbose\n");
+                /** @todo Remove after testing */
+                printf("verbose\n");
             } break;
 
             case '?': {
-                // printf("?? %s\n", long_options[optind].flag);
+                /** @todo Remove after testing */
+                //printf("?? %s\n", long_options[optind].flag);
+                /**
+                 * @brief There's no need to display an
+                 * error message here because getopt_long
+                 * will have already done that.
+                 *
+                 * We can simply exit with a non-zero status
+                 * to indicate an error has ocurred.
+                 * 
+                 */
+                return EXIT_FAILURE;
             } break;
 
             default: {
-                // printf("%d %s\n", optind, optarg);
+                /**
+                 * @brief This branch should never be taken;
+                 * if it is, it represents a catastrophic
+                 * breakdown in logic, and concrete proof
+                 * that I'm dumb.
+                 * 
+                 */
+                fprintf(stderr, "%s\n", "[Fatal Error] Invalid code path in option parsing");
+
+                /**
+                 * @brief Exit with a non-zero exit status
+                 * to make the shame both objectively real
+                 * and quantitative.
+                 * 
+                 */
+                return EXIT_FAILURE;
             } break;
         }
     }
 
-    // if (option_index < argc) {
-    //     printf("non-option argv-elements: ");
+    /** @todo Remove after testing */
+    if (option_index < argc) {
+        printf("non-option argv-elements: ");
 
-    //     while (optind < argc) {
-    //         printf("%s ", argv[optind++]);
-    //     }
+        while (optind < argc) {
+            printf("%s ", argv[optind++]);
+        }
 
-    //     printf("\n");
-    // }
+        printf("\n");
+    }
 
-    // printf("Verbose: %d\n", verbose);
-    // printf("Quiet: %d\n", quiet);
+    /** @todo Remove after testing */
+    printf("Verbose: %d\n", verbose);
 
     // TODO: Read command-line line args
     // TODO: Read configuration file ----------
